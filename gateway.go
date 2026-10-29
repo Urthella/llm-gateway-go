@@ -23,16 +23,25 @@ type Gateway struct {
 	client  *http.Client
 	limits  *limiter
 	metrics *metrics
+	cache   *cache // nil when caching is off
 }
 
-func NewGateway(cfg *Config) *Gateway {
-	return &Gateway{
+func NewGateway(cfg *Config) (*Gateway, error) {
+	g := &Gateway{
 		cfg: cfg,
 		// No overall timeout: a stream can run for minutes. Waiting for the first byte is bounded instead.
 		client:  &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 5 * time.Minute}},
 		limits:  &limiter{tat: map[string]time.Time{}, now: time.Now},
 		metrics: newMetrics(),
 	}
+	if cfg.Cache != nil {
+		c, err := newCache(cfg.Cache)
+		if err != nil {
+			return nil, err
+		}
+		g.cache = c
+	}
+	return g, nil
 }
 
 func (g *Gateway) Handler() http.Handler {
@@ -82,6 +91,21 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 		req["stream_options"] = opts
 	}
 
+	key := ""
+	if g.cache != nil {
+		if key = cacheKey(client, req, stream); key != "" {
+			if e, ok := g.cache.get(key); ok {
+				w.Header().Set("Content-Type", e.contentType)
+				w.Header().Set("X-Gateway-Upstream", e.upstream)
+				w.Header().Set("X-Gateway-Cache", "hit")
+				_, _ = w.Write(e.body)
+				g.metrics.request(client, alias, e.upstream, "cache_hit")
+				return
+			}
+			w.Header().Set("X-Gateway-Cache", "miss")
+		}
+	}
+
 	var failures []string
 	for _, route := range routes {
 		req["model"] = route.Model
@@ -90,7 +114,10 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 		resp, err := g.send(r, route, payload)
 		if err == nil && resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
 			defer func() { _ = resp.Body.Close() }()
-			g.relay(w, resp, stream, record{client: client, alias: alias, route: route, start: start})
+			body := g.relay(w, resp, stream, record{client: client, alias: alias, route: route, start: start})
+			if key != "" && resp.StatusCode == http.StatusOK && body != nil {
+				g.cache.put(key, cached{body: body, contentType: resp.Header.Get("Content-Type"), upstream: route.Upstream})
+			}
 			return
 		}
 		// Network errors, 429 and 5xx are the upstream's problem: try the next route.
@@ -128,16 +155,19 @@ type record struct {
 }
 
 // relay copies the upstream response to the client and meters its token usage.
-func (g *Gateway) relay(w http.ResponseWriter, resp *http.Response, stream bool, rec record) {
+// It returns the body of a non-streamed response, so the caller can cache it.
+func (g *Gateway) relay(w http.ResponseWriter, resp *http.Response, stream bool, rec record) []byte {
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.Header().Set("X-Gateway-Upstream", rec.route.Upstream)
 	w.WriteHeader(resp.StatusCode)
 
 	var u usage
+	var body []byte
 	if stream && resp.StatusCode == http.StatusOK {
 		u = g.pipeStream(w, resp.Body)
 	} else {
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+		var err error
+		body, err = io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 		if err != nil {
 			log.Printf("reading %s response: %v", rec.route.Upstream, err)
 		}
@@ -155,6 +185,7 @@ func (g *Gateway) relay(w http.ResponseWriter, resp *http.Response, stream bool,
 	cost := g.metrics.usage(rec.client, rec.alias, u, g.cfg.Prices[rec.route.Model])
 	log.Printf("%s %s via %s/%s %s in %s, %d+%d tokens, $%.6f", rec.client, rec.alias, rec.route.Upstream,
 		rec.route.Model, status, time.Since(rec.start).Round(time.Millisecond), u.Prompt, u.Completion, cost)
+	return body
 }
 
 type usage struct {

@@ -15,6 +15,7 @@ type Config struct {
 	Models    map[string][]Route  `json:"models"` // alias -> routes tried in order
 	Prices    map[string]Price    `json:"prices"` // upstream model -> USD per million tokens
 	Keys      map[string]Key      `json:"keys"`   // client name -> key; empty means no auth (local use)
+	Cache     *CacheConfig        `json:"cache"`  // optional
 }
 
 // Upstream is any OpenAI-compatible API: OpenAI, Anthropic's compatibility endpoint, Ollama, vLLM, ...

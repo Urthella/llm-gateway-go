@@ -47,7 +47,8 @@ func status(code int) func(http.ResponseWriter, map[string]any) {
 }
 
 // gateway wires a primary and a backup upstream behind the alias "smart", with one client key.
-func gateway(t *testing.T, primary, backup *upstream, rpm int) *httptest.Server {
+// A second client, "team-b" with key "gw-other", exists to check per-client isolation.
+func gateway(t *testing.T, primary, backup *upstream, rpm int, cache ...*CacheConfig) *httptest.Server {
 	cfg := &Config{
 		Upstreams: map[string]Upstream{
 			"primary": {BaseURL: primary.URL + "/v1", APIKeyEnv: "PRIMARY_KEY"},
@@ -55,13 +56,20 @@ func gateway(t *testing.T, primary, backup *upstream, rpm int) *httptest.Server 
 		},
 		Models: map[string][]Route{"smart": {{"primary", "big-model"}, {"backup", "small-model"}}},
 		Prices: map[string]Price{"big-model": {Input: 3, Output: 15}, "small-model": {Input: 0.5, Output: 1}},
-		Keys:   map[string]Key{"team-a": {KeyEnv: "TEAM_A", RPM: rpm}},
+		Keys:   map[string]Key{"team-a": {KeyEnv: "TEAM_A", RPM: rpm}, "team-b": {KeyEnv: "TEAM_B"}},
 	}
-	env := map[string]string{"PRIMARY_KEY": "sk-upstream", "TEAM_A": "gw-secret"}
+	if len(cache) > 0 {
+		cfg.Cache = cache[0]
+	}
+	env := map[string]string{"PRIMARY_KEY": "sk-upstream", "TEAM_A": "gw-secret", "TEAM_B": "gw-other"}
 	if err := cfg.resolve(func(k string) string { return env[k] }); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(NewGateway(cfg).Handler())
+	gw, err := NewGateway(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(gw.Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
