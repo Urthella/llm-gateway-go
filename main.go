@@ -25,7 +25,11 @@ func main() {
 		log.Print("llm-gateway: no keys configured, every request is accepted as \"anonymous\"; keep it on localhost")
 	}
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: NewGateway(cfg).Handler(), ReadHeaderTimeout: 10 * time.Second}
+	gw, err := NewGateway(cfg)
+	if err != nil {
+		log.Fatalf("llm-gateway: %v", err)
+	}
+	srv := &http.Server{Addr: cfg.Listen, Handler: gw.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	// SIGTERM too: it's what Docker and Kubernetes send, and open streams deserve a graceful drain.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -55,6 +55,7 @@ See [gateway.example.json](gateway.example.json). Secrets never go in the file, 
 - **Requests stay intact**: only `model` (and the usage option above) is changed, so tools, `response_format` and anything provider-specific pass straight through.
 - **Errors** come back in OpenAI's error format, so SDKs show the gateway's message.
 - **Shutdown**: on `SIGINT` / `SIGTERM` it stops accepting requests and gives open streams 30 seconds to finish.
+- **Cache** (optional, `"cache": {"ttl": "10m", "max_entries": 1000}`): repeats of a request that sets `temperature: 0` and isn't streamed are answered from memory, marked `X-Gateway-Cache: hit`, at zero token cost. Keys are per client, so one client's answers are never served to another, and they hash the whole request (JSON field order doesn't matter). Only `200` responses are stored.
 
 ## Metrics
 

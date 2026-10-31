@@ -19,6 +19,7 @@
     "claude-sonnet-5-5": { "input": 3, "output": 15 },
     "claude-haiku-5-5": { "input": 1, "output": 5 }
   },
+  "cache": { "ttl": "10m", "max_entries": 1000 },
   "keys": {
     "laptop": { "key_env": "GATEWAY_KEY_LAPTOP", "rpm": 120 },
     "ci": { "key_env": "GATEWAY_KEY_CI", "rpm": 20 }
